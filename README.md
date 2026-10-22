@@ -49,6 +49,7 @@ An agentic framework for generating publication-quality academic diagrams and st
 - **PDF inputs** for methodology context (optional `paperbanana[pdf]` / PyMuPDF), with per-page selection
 - **PaperBanana Studio** — local Gradio web UI (`paperbanana studio`) for diagrams, plots, evaluation, batch, and run browser
 - Claude Code skills for `/generate-diagram`, `/generate-plot`, and `/evaluate-diagram`
+- **Host-delegated mode (this fork)** — Claude Code or Codex does every LLM step with its own subagents, so no LLM API key is needed; see [below](#run-with-claude-code-or-codex-no-llm-api-key)
 
 <p align="center">
   <img src="assets/img/hero_image.png" alt="PaperBanana takes paper as input and provide diagram as output" style="max-width: 960px; width: 100%; height: auto;"/>
@@ -57,6 +58,99 @@ An agentic framework for generating publication-quality academic diagrams and st
 **Learning LLM concepts?** We also publish [211 free visual cards](https://github.com/llmsresearch/llm-flashcards)
 on attention, RAG, agents, and inference.
 [Read them online](https://llmsresearch.com/cards?utm_source=github&utm_medium=referral&utm_campaign=visual_library&utm_content=paperbanana-readme).
+
+## Run with Claude Code or Codex (no LLM API key)
+
+In this fork, the agent you are already running (Claude Code or Codex) does every LLM step of PaperBanana: retriever, planner, stylist, critic, plot code. Each step runs in a fresh subagent. PaperBanana itself runs through the `paperbanana-host` MCP server, which keeps the original pipeline: reference images, prompt assembly, response parsing, aspect-ratio choice and the critic loop. The final image is rendered by **Codex image generation** (default, no key) or by your **image API** (`image_backend="api"`).
+
+```
+agent ──pb_start──► paperbanana-host MCP server (runs the real pipeline, pauses at each LLM call)
+  │  needs_llm    → a fresh subagent reads prompt_file + image_files, answers with pb_submit
+  │  needs_render → pb_render (Codex image generation or image API)
+  └─ repeat until status == "done" → final_image
+```
+
+### 1. Setup (once, from the repo root)
+
+```bash
+git clone https://github.com/RxCodeLab/paperbanana_sub.git && cd paperbanana_sub
+uv venv --python 3.12 .venv                 # the MCP config expects .venv/ in the repo root
+uv pip install --python .venv/bin/python -e ".[mcp]"
+codex login                                 # needed for the default Codex image backend
+.venv/bin/paperbanana data download         # optional: 295 reference examples (~254 MB) instead of the 38 built in
+```
+
+Without `uv`: `python3 -m venv .venv && .venv/bin/pip install -e ".[mcp]"`.
+
+### 2a. Claude Code
+
+Everything is checked in: `.mcp.json` (the `paperbanana-host` server), `.claude/skills/paperbanana/` (the orchestrating skill) and `.claude/agents/paperbanana-worker.md` (one worker per LLM call).
+
+**Interactive:** start `claude` in the repo root, approve the `paperbanana-host` server when asked, then run:
+
+```
+/paperbanana examples/sample_inputs/transformer_method.txt "Overview of the Transformer encoder-decoder architecture"
+/paperbanana examples/sample_data/benchmark_slice.csv "Compare accuracy and F1 across models"
+```
+
+**Headless** (scripts, or another agent driving Claude Code):
+
+```bash
+claude -p "Use the paperbanana skill to make a methodology diagram from $PWD/examples/sample_inputs/transformer_method.txt \
+with the caption \"Overview of the Transformer encoder-decoder architecture\". Use the codex image backend." \
+  --mcp-config .mcp.json --strict-mcp-config \
+  --allowedTools mcp__paperbanana-host__pb_start mcp__paperbanana-host__pb_submit \
+                 mcp__paperbanana-host__pb_render mcp__paperbanana-host__pb_status Read Agent Skill
+```
+
+Workers use the session's model (`model: inherit` in `.claude/agents/paperbanana-worker.md`); set `--model` to choose it.
+
+### 2b. Codex
+
+Add the server to `~/.codex/config.toml` (use your absolute repo path):
+
+```toml
+[mcp_servers.paperbanana-host]
+command = "/abs/path/to/paperbanana_sub/.venv/bin/paperbanana-host-mcp"
+cwd = "/abs/path/to/paperbanana_sub"
+tool_timeout_sec = 1800                   # pb_render can take several minutes
+default_tools_approval_mode = "approve"   # otherwise every pb_* call asks for approval
+```
+
+The skill is in `.agents/skills/paperbanana/`. Run `codex` in the repo root and ask, for example: *"Use the paperbanana skill to make a diagram from examples/sample_inputs/transformer_method.txt, caption: Overview of the Transformer architecture."* Codex loads MCP tools on demand, so its first call may be a tool search.
+
+### 3. Output
+
+Each run writes `outputs/run_<timestamp>_<id>/`:
+
+| Path | Contents |
+|---|---|
+| `final_output.png` | the final figure (the last refinement round) |
+| `diagram_iter_N.png` / `plot_iter_N.png` | each round's image (`.py` next to plots holds the generated code) |
+| `host/calls/` | every prompt sent to a worker and every answer (`llm-NNN_<agent>.prompt.md` / `.answer.md`) |
+| `iter_N/details.json` | the description rendered in round N and the critic's suggestions |
+| `host/session.json` | run state; an interrupted run continues with `pb_status(run_dir)` |
+| `metadata.json` | settings, providers, timings |
+
+### Tool protocol (for agents not using the skill)
+
+Any MCP client can drive a run with the four tools. Every call returns the next step.
+
+| Tool | Use |
+|---|---|
+| `pb_start` | `caption` plus `source_path` or `source_text` (methodology), or `diagram_type="statistical_plot"` with `data_path` (.csv/.json). Options: `image_backend` (`codex`/`api`), `aspect_ratio`, `venue`, `iterations` (default 3), `input_images`, `generate_caption`, `output_dir`. |
+| `pb_submit` | `run_dir`, `call_id`, `output`. The full answer to a `needs_llm` step. JSON steps are validated, and an invalid answer is rejected so it can be resubmitted. |
+| `pb_render` | `run_dir`. Performs a `needs_render` step. Takes minutes with Codex. |
+| `pb_status` | `run_dir`. Returns the current step; use it to resume. |
+
+The step's `status` says what to do:
+- **`needs_llm`:** read `prompt_file` in full (retriever prompts can exceed 250 KB), look at every file in `image_files` in order, and answer exactly as the prompt's output format says. Use a fresh context for each call.
+- **`needs_render`:** call `pb_render`.
+- **`done`:** read `final_image`, `iterations` (with critic summaries) and `metadata_file`.
+
+Image backends: `codex` uses `codex exec` image generation (model: `CODEX_IMAGE_MODEL`, default Codex's own). `api` uses `IMAGE_PROVIDER` / `IMAGE_MODEL` and its API key from `.env` (default `google_imagen`). Set the default with `PAPERBANANA_HOST_IMAGE_BACKEND`. Statistical plots never use an image backend: their matplotlib code runs locally. More detail is in [`docs/host-mode.md`](docs/host-mode.md).
+
+The rest of this README describes upstream PaperBanana, where every LLM step goes through an API provider.
 
 ## Atlas Cloud
 
@@ -699,6 +793,8 @@ The repo also ships with 3 Claude Code skills:
 - `/evaluate-diagram <generated> <reference>` - evaluate a diagram against a human reference
 
 See [`mcp_server/README.md`](mcp_server/README.md) for full setup details (Claude Code, Cursor, local development).
+
+A second server, `paperbanana-host`, needs no LLM API key: Claude Code or Codex does the LLM steps itself. See [Run with Claude Code or Codex](#run-with-claude-code-or-codex-no-llm-api-key).
 
 ---
 
