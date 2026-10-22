@@ -53,6 +53,7 @@ paper.md
 .cursor/
 .claude/*
 !.claude/skills/
+!.claude/agents/
 .deepseek/
 .gemini/
 .google/
@@ -62,6 +63,8 @@ paper.md
 .mcp/
 .mcp.yaml
 .mcp.json
+# Project server for host-delegated runs (no secrets)
+!/.mcp.json
 .mcp.yml
 .mcp.yaml.lock
 CLAUDE.md

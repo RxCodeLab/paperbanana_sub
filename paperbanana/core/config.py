@@ -170,6 +170,9 @@ class Settings(BaseSettings):
     bedrock_vlm_model: Optional[str] = Field(default=None, alias="BEDROCK_VLM_MODEL")
     bedrock_image_model: Optional[str] = Field(default=None, alias="BEDROCK_IMAGE_MODEL")
 
+    # Codex CLI image generation (None = the codex default model)
+    codex_image_model: Optional[str] = Field(default=None, alias="CODEX_IMAGE_MODEL")
+
     @property
     def effective_vlm_model(self) -> str:
         """Return the VLM model for the active provider."""
@@ -194,6 +197,8 @@ class Settings(BaseSettings):
             return self.atlascloud_image_model
         if self.image_provider == "bedrock_imagen" and self.bedrock_image_model:
             return self.bedrock_image_model
+        if self.image_provider == "codex_imagen":
+            return self.codex_image_model or "codex-default"
         return self.image_model
 
     # SSL

@@ -254,9 +254,21 @@ class ProviderRegistry:
                 region=settings.aws_region,
                 profile=settings.aws_profile,
             )
+        elif provider == "codex_imagen":
+            from paperbanana.providers.image_gen.codex_imagen import CodexImageGen
+
+            # image_model defaults to a Gemini model id, which means nothing to
+            # codex; only an explicit CODEX_IMAGE_MODEL is forwarded.
+            image_gen = CodexImageGen(model=settings.codex_image_model)
+            if not image_gen.is_available():
+                raise ValueError(
+                    "codex CLI not found in PATH.\n\n"
+                    "Install Codex and sign in, then ensure `codex` is available on PATH."
+                )
+            return image_gen
         else:
             raise ValueError(
                 f"Unknown image provider: {provider}. "
                 "Available: none, google_imagen, openrouter_imagen, "
-                "openai_imagen, atlas_imagen, bedrock_imagen"
+                "openai_imagen, atlas_imagen, bedrock_imagen, codex_imagen"
             )

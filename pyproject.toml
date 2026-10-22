@@ -75,6 +75,7 @@ Issues = "https://github.com/llmsresearch/paperbanana/issues"
 [project.scripts]
 paperbanana = "paperbanana.cli:app"
 paperbanana-mcp = "mcp_server.server:main"
+paperbanana-host-mcp = "mcp_server.host_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["paperbanana", "mcp_server"]

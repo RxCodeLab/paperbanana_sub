@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "paperbanana-host": {
+      "command": ".venv/bin/paperbanana-host-mcp",
+      "args": [],
+      "timeout": 1800000
+    }
+  }
+}
